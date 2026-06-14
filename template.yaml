@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: Bridge Order API
+
+Globals:
+  Function:
+    Runtime: python3.14
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+
+  BridgeOrderApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.main.handler
+      CodeUri: .
+      Architectures:
+        - x86_64
+
+      Environment:
+        Variables:
+          USE_DYNAMODB: "true"
+          ORDERS_TABLE_NAME: orders
+          POWERTOOLS_SERVICE_NAME: bridge-order-api
+          POWERTOOLS_METRICS_NAMESPACE: BridgeOrderAPI
+          LOG_LEVEL: INFO
+
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: orders
+
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+        Root:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+
+Outputs:
+
+  ApiUrl:
+    Description: API Gateway URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

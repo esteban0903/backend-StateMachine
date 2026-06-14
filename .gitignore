@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Environment
+.env
+.env.*
+
+# AWS SAM build artifacts
+.aws-sam/
+
+
+frontend/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
