@@ -6,6 +6,9 @@ from app.domain.enums.order_event import OrderEvent
 from app.domain.enums.order_state import OrderState
 from app.domain.exceptions.domain_exceptions import OrderNotFoundError
 from app.repositories.in_memory_order_repository import InMemoryOrderRepository
+from app.rules.runtime.action_dispatcher import ActionDispatcher
+from app.rules.repositories.in_memory_rule_repository import InMemoryRuleRepository
+from app.rules.services.rule_service import RuleService
 from app.services.order_service import OrderService
 from app.domain.state_machine import TransitionTableStateMachine
 
@@ -107,7 +110,9 @@ def test_payment_failed_creates_ticket_when_amount_above_threshold() -> None:
     repository = InMemoryOrderRepository()
     state_machine = TransitionTableStateMachine()
     ticket_service = RecordingTicketService()
-    order_service = OrderService(repository, state_machine, ticket_service)
+    rule_service = RuleService(InMemoryRuleRepository())
+    action_dispatcher = ActionDispatcher(ticket_service=ticket_service)
+    order_service = OrderService(repository, state_machine, rule_service, action_dispatcher)
     order = order_service.create_order(["P1"], 1201)
 
     # Act
@@ -123,7 +128,9 @@ def test_payment_failed_does_not_create_ticket_when_amount_is_at_or_below_thresh
     repository = InMemoryOrderRepository()
     state_machine = TransitionTableStateMachine()
     ticket_service = RecordingTicketService()
-    order_service = OrderService(repository, state_machine, ticket_service)
+    rule_service = RuleService(InMemoryRuleRepository())
+    action_dispatcher = ActionDispatcher(ticket_service=ticket_service)
+    order_service = OrderService(repository, state_machine, rule_service, action_dispatcher)
     order = order_service.create_order(["P1"], 1000)
 
     # Act

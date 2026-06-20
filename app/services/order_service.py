@@ -11,8 +11,10 @@ from app.domain.models.order import Order
 from app.domain.models.order_history_entry import OrderHistoryEntry
 from app.domain.state_machine import TransitionTableStateMachine as StateMachine
 from app.repositories.order_repository import OrderRepository
+from app.rules.models.context import RuleEvaluationContext
+from app.rules.runtime.action_dispatcher import ActionDispatcher
+from app.rules.services.rule_service import RuleService
 from app.services.observability import increment_metric, logger, order_logging_context, tracer
-from app.services.ticket_service import TicketService
 
 
 class OrderService:
@@ -20,11 +22,13 @@ class OrderService:
         self,
         order_repository: OrderRepository,
         state_machine: StateMachine,
-        ticket_service: TicketService,
+        rule_service: RuleService,
+        action_dispatcher: ActionDispatcher,
     ) -> None:
         self._order_repository = order_repository
         self._state_machine = state_machine
-        self._ticket_service = ticket_service
+        self._rule_service = rule_service
+        self._action_dispatcher = action_dispatcher
 
     @tracer.capture_method
     def create_order(self, product_ids: list[str], amount: float) -> Order:
@@ -36,13 +40,7 @@ class OrderService:
         )
         saved_order = self._order_repository.save(order)
 
-        with order_logging_context(
-            order_id=saved_order.id,
-            event_type=None,
-            current_state=saved_order.state.value,
-            next_state=saved_order.state.value,
-        ):
-            logger.info("Order created")
+        # structured logging removed for successful creation to reduce noise
 
         increment_metric("OrdersCreated")
         return saved_order
@@ -58,26 +56,10 @@ class OrderService:
     def get_order_history(self, order_id: str) -> list[OrderHistoryEntry]:
         return self.get_order(order_id).history
 
-    @tracer.capture_method
-    def process_event(
-        self,
-        order_id: str,
-        event_type: OrderEvent,
-        metadata: dict[str, Any] | None = None,
-    ) -> Order:
-        order = self.get_order(order_id)
+    def _resolve_next_state(self, order: Order, event_type: OrderEvent) -> OrderState:
         current_state = order.state
-
-        with order_logging_context(
-            order_id=order.id,
-            event_type=event_type.value,
-            current_state=current_state.value,
-            next_state=None,
-        ):
-            logger.info("Processing order event")
-
         try:
-            next_state = self._state_machine.get_next_state(current_state, event_type)
+            return self._state_machine.get_next_state(current_state, event_type)
         except InvalidTransitionError:
             increment_metric("InvalidTransitions")
 
@@ -91,18 +73,27 @@ class OrderService:
 
             raise
 
-        if event_type is OrderEvent.PAYMENT_FAILED and order.amount > 1000:
-            self._ticket_service.create_support_review_ticket(
-                order_id=order.id,
-                amount=order.amount,
-                metadata=metadata,
-            )
-            increment_metric("SupportReviewTicketsCreated")
+    def _build_rule_context(
+        self,
+        order: Order,
+        event_type: OrderEvent,
+        metadata: dict[str, Any] | None,
+    ) -> RuleEvaluationContext:
+        return RuleEvaluationContext(
+            order_id=order.id,
+            amount=order.amount,
+            state=order.state,
+            event_type=event_type,
+            metadata=dict(metadata or {}),
+        )
 
+    def _record_transition(
+        self, order: Order, event_type: OrderEvent, previous_state: OrderState, next_state: OrderState
+    ) -> None:
         order.history.append(
             OrderHistoryEntry(
                 event_type=event_type.value,
-                previous_state=current_state.value,
+                previous_state=previous_state.value,
                 new_state=next_state.value,
                 timestamp=datetime.now(UTC).replace(microsecond=0).isoformat().replace(
                     "+00:00",
@@ -111,15 +102,31 @@ class OrderService:
             )
         )
         order.state = next_state
+
+    @tracer.capture_method
+    def process_event(
+        self,
+        order_id: str,
+        event_type: OrderEvent,
+        metadata: dict[str, Any] | None = None,
+    ) -> Order:
+        order = self.get_order(order_id)
+        previous_state = order.state
+
+        rule_context = self._build_rule_context(order, event_type, metadata)
+        rule_results = self._rule_service.evaluate(rule_context)
+
+        # Resolve next state (handles invalid transitions and logs warning)
+        next_state = self._resolve_next_state(order, event_type)
+
+        # Apply dynamic business rules before persisting the transition
+        dispatch_outcome = self._action_dispatcher.dispatch(order=order, results=rule_results, metadata=metadata)
+        if dispatch_outcome.next_state is not None:
+            next_state = dispatch_outcome.next_state
+
+        self._record_transition(order, event_type, previous_state, next_state)
         saved_order = self._order_repository.save(order)
 
-        with order_logging_context(
-            order_id=saved_order.id,
-            event_type=event_type.value,
-            current_state=current_state.value,
-            next_state=next_state.value,
-        ):
-            logger.info("Order event processed")
-
+        # Final metrics
         increment_metric("EventsProcessed")
         return saved_order

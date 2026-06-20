@@ -19,6 +19,9 @@ from app.domain.models.order import Order
 from app.repositories.dynamodb_order_repository import DynamoDbOrderRepository
 from app.repositories.in_memory_order_repository import InMemoryOrderRepository
 from app.repositories.order_repository import OrderRepository
+from app.rules.runtime.action_dispatcher import ActionDispatcher
+from app.rules.repositories.in_memory_rule_repository import InMemoryRuleRepository
+from app.rules.services.rule_service import RuleService
 from app.services.order_service import OrderService
 from app.domain.state_machine import TransitionTableStateMachine
 from app.services.ticket_service import InMemoryTicketService
@@ -46,7 +49,9 @@ def _create_order_service() -> OrderService:
     order_repository = _create_order_repository()
     state_machine = TransitionTableStateMachine()
     ticket_service = InMemoryTicketService()
-    return OrderService(order_repository, state_machine, ticket_service)
+    rule_service = RuleService(InMemoryRuleRepository())
+    action_dispatcher = ActionDispatcher(ticket_service=ticket_service)
+    return OrderService(order_repository, state_machine, rule_service, action_dispatcher)
 
 
 def get_order_service() -> OrderService:

@@ -46,15 +46,22 @@ TRANSITIONS: dict[OrderState, dict[OrderEvent, OrderState]] = {
 
 class TransitionTableStateMachine:
     def __init__(self, transitions: StateTransitionTable | None = None) -> None:
-        self._transitions = dict(transitions or TRANSITIONS)
+        base = transitions or TRANSITIONS
+        # Create a shallow copy of the outer mapping and copy each inner mapping
+        # so we can augment safely without mutating module-level constants.
+        self._transitions: dict[OrderState, dict[OrderEvent, OrderState]] = {
+            state: dict(mapping) for state, mapping in base.items()
+        }
+
+        # Make the global "cancel by user" rule declarative: for every non-terminal
+        # state that doesn't already define ORDER_CANCELLED_BY_USER, map it to CANCELLED.
+        for state, mapping in list(self._transitions.items()):
+            if state in TERMINAL_STATES:
+                continue
+            if OrderEvent.ORDER_CANCELLED_BY_USER not in mapping:
+                mapping[OrderEvent.ORDER_CANCELLED_BY_USER] = OrderState.CANCELLED
 
     def get_next_state(self, current_state: OrderState, event_type: OrderEvent) -> OrderState:
-        if event_type is OrderEvent.ORDER_CANCELLED_BY_USER:
-            if current_state in TERMINAL_STATES:
-                raise InvalidTransitionError(current_state, event_type)
-
-            return OrderState.CANCELLED
-
         state_transitions = self._transitions.get(current_state, {})
         next_state = state_transitions.get(event_type)
 
